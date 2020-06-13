@@ -7,7 +7,6 @@ import numpy as np
 import pandas as pd
 import pymc3 as pm
 from scipy import stats
-from scipy.interpolate import griddata
 from theano import shared
 
 
@@ -125,7 +124,7 @@ az.summary(m_5_3_trace, var_names=["a", "bM", "bA", "sigma"])
 
 # %%
 az.plot_forest(
-    [m_5_3_trace, m_5_2_trace, m_5_1_trace,],
+    [m_5_3_trace, m_5_2_trace, m_5_1_trace, ],
     model_names=["5.3", "5.2", "5.1"],
     var_names=["bA", "bM"],
     combined=True,
@@ -306,3 +305,242 @@ for i, age_counterfactual in enumerate(A_seq):
     D_sim[i, :] = samples
 
 # %%
+d = pd.read_csv(os.path.join("data", "milk.csv"), delimiter=";")
+d.head()
+
+# %%
+d["K"] = standardize(d["kcal.per.g"])
+d["N"] = standardize(d["neocortex.perc"])
+d["M"] = standardize(d["mass"])
+
+# %%
+d["neocortex.perc"]
+
+# %%
+dcc = d.dropna(axis=0)
+dcc.shape
+
+# %%
+shared_N = shared(dcc["N"].values)
+
+with pm.Model() as m5_5_draft:
+    sigma = pm.Exponential("sigma", 1)
+    bN = pm.Normal("bN", 0, 1)
+    a = pm.Normal("a", 0, 1)
+    mu = pm.Deterministic("mu", a + bN * shared_N)
+
+    K = pm.Normal("K", mu, sigma, observed=dcc["K"])
+
+    m5_5_draft_trace = pm.sample()
+
+
+# %%
+xseq = [-2, 2]
+shared_N.set_value(np.array(xseq))
+with m5_5_draft:
+    m5_5_draft_prior_predictive = pm.sample_prior_predictive()
+
+
+# %%
+fig, ax = plt.subplots()
+
+for i in range(50):
+    ax.plot(xseq, m5_5_draft_prior_predictive["K"][i], c="black", alpha=0.3)
+ax.set_xlim(xseq)
+ax.set_ylim(xseq)
+ax.set_title("a~dnorm(0,1) \n bN~dnorm(0,1")
+ax.set_xlabel("neocortex percent (std)")
+ax.set_ylabel("kilocal per g (std)")
+
+# %%
+shared_N = shared(dcc["N"].values)
+
+with pm.Model() as m5_5:
+    sigma = pm.Exponential("sigma", 1)
+    bN = pm.Normal("bN", 0, 0.5)
+    a = pm.Normal("a", 0, 0.2)
+    mu = pm.Deterministic("mu", a + bN * shared_N)
+
+    K = pm.Normal("K", mu, sigma, observed=dcc["K"])
+
+    m5_5_trace = pm.sample()
+
+m5_5_data = az.from_pymc3(m5_5_trace)
+
+# %%
+az.summary(m5_5_trace, var_names=["a", "bN", "sigma"])
+
+# %%
+xseq = np.linspace(dcc["N"].min() - 0.15, dcc["N"].max() + 0.15, 30)
+
+shared_N.set_value(xseq)
+
+with m5_5:
+    m5_5_posterior_predictive = pm.sample_posterior_predictive(
+        m5_5_trace, var_names=["mu"], samples=4000
+    )
+
+mu_mean = m5_5_posterior_predictive["mu"].mean(axis=0)
+
+fig, ax = plt.subplots()
+ax.plot(xseq, mu_mean, c="black")
+ax.scatter(dcc["N"], dcc["K"], facecolors="none", edgecolors="b")
+az.plot_hpd(xseq, m5_5_posterior_predictive["mu"], ax=ax)
+ax.set_ylim(-1.5, 2.2)
+ax.set_xlabel("neocortex percent (std)")
+ax.set_ylabel("kilocal per g (std)")
+
+# %%
+shared_M = shared(dcc["M"].values)
+
+with pm.Model() as m5_6:
+    sigma = pm.Exponential("sigma", 1)
+    bM = pm.Normal("bM", 0, 0.5)
+    a = pm.Normal("a", 0, 0.2)
+    mu = pm.Deterministic("mu", a + bM * shared_M)
+
+    K = pm.Normal("K", mu, sigma, observed=dcc["K"])
+
+    m5_6_trace = pm.sample()
+
+m5_6_data = az.from_pymc3(m5_6_trace)
+az.summary(m5_6_trace, var_names=["bM", "a", "sigma"])
+
+# %%
+shared_N = shared(dcc["N"].values)
+shared_M = shared(dcc["M"].values)
+
+with pm.Model() as m5_7:
+    sigma = pm.Exponential("sigma", 1)
+    bN = pm.Normal("bN", 0, 0.5)
+    bM = pm.Normal("bM", 0, 0.5)
+    a = pm.Normal("a", 0, 0.2)
+
+    mu = pm.Deterministic("mu", a + bN * shared_N + bM * shared_M)
+
+    K = pm.Normal("K", mu, sigma, observed=dcc["K"])
+
+    m5_7_trace = pm.sample(tune=2000, draws=10000)
+
+m5_7_data = az.from_pymc3(m5_7_trace)
+az.summary(m5_7_trace, var_names=["a", "bN", "bM", "sigma"])
+
+# %%
+az.plot_forest(
+    [m5_7_data, m5_6_data, m5_5_data],
+    model_names=["m5.7", "m5.6", "m5.5"],
+    var_names=["bM", "bN"],
+    combined=True,
+)
+
+# %%
+xseq = np.linspace(dcc["M"].min() - 0.15, dcc["M"].max() + 0.15, 30)
+shared_N.set_value(np.zeros(30))
+shared_M.set_value(xseq)
+
+with m5_7:
+    m5_7_posterior_predictive = pm.sample_posterior_predictive(
+        m5_7_trace, var_names=["mu"], samples=4000
+    )
+
+mu_mean = m5_7_posterior_predictive["mu"].mean(axis=0)
+
+fig, ax = plt.subplots()
+ax.plot(xseq, mu_mean, c="black")
+az.plot_hpd(xseq, m5_7_posterior_predictive["mu"], ax=ax)
+
+ax.set_ylim(-1.5, 2.2)
+ax.set_title("Counterfactual holding N=0")
+ax.set_ylabel("kilocal per g (std)")
+ax.set_xlabel("log body mass (std)")
+
+# %%
+n = 100
+M = stats.norm().rvs(n)
+N = stats.norm(M).rvs(n)
+K = stats.norm(N - M).rvs(n)
+d_sim = pd.DataFrame({"K": K, "M": M, "N": N})
+
+# %%
+n = 100
+N = stats.norm().rvs(n)
+M = stats.norm(N).rvs(100)
+K = stats.norm(N - M).rvs(100)
+d_sim2 = pd.DataFrame({"K": K, "M": M, "N": N})
+
+# %%
+n = 100
+U = stats.norm().rvs(n)
+N = stats.norm(U).rvs(n)
+M = stats.norm(U).rvs(100)
+K = stats.norm(N - M).rvs(100)
+d_sim3 = pd.DataFrame({"K": K, "M": M, "N": N})
+
+# %%
+
+d = pd.read_csv(os.path.join("data", "Howell1.csv"), delimiter=";")
+d.head()
+
+# %%
+mu_female = stats.norm(178, 20).rvs(1000)
+mu_male = stats.norm(178, 20).rvs(1000) + stats.norm(0, 10).rvs(1000)
+
+az.summary({"mu_female": mu_female, "mu_male": mu_male}, kind="stats")
+
+# %%
+sex = d["male"].values
+
+with pm.Model() as m5_8:
+    sigma = pm.Uniform("sigma", 0, 50)
+    mu = pm.Normal("mu", 178, 20, shape=2)
+    height = pm.Normal("height", mu[sex], sigma, observed=d["height"])
+    m5_8_trace = pm.sample()
+
+az.summary(m5_8_trace)
+
+# %%
+sex = d["male"].values
+
+with pm.Model() as m5_8:
+    sigma = pm.Uniform("sigma", 0, 50)
+    mu = pm.Normal("mu", 178, 20, shape=2)
+    height = pm.Normal("height", mu[sex], sigma, observed=d["height"])
+    diff_fm = pm.Deterministic("diff", mu[0] - mu[1])
+    m5_8_trace = pm.sample()
+
+az.summary(m5_8_trace)
+
+# %%
+d = pd.read_csv(os.path.join("data", "milk.csv"), delimiter=";")
+d.head()
+
+# %%
+d["clade_id"] = pd.Categorical(d["clade"]).codes
+
+# %%
+d["K"] = standardize(d["kcal.per.g"])
+
+with pm.Model() as m5_9:
+    sigma = pm.Exponential("sigma", 1)
+    mu = pm.Normal("mu", 0, 0.5, shape=d["clade_id"].max() + 1)
+    K = pm.Normal("K", mu[d["clade_id"]], sigma, observed=d["K"])
+
+    m5_9_trace = pm.sample()
+
+az.plot_forest(m5_9_trace, combined=True, var_names=["mu"])
+
+# %%
+d["house"] = np.random.randint(0, 4, size=d.shape[0])
+
+# %%
+with pm.Model() as m5_10:
+    sigma = pm.Exponential("sigma", 1)
+    mu_house = pm.Normal("mu_house", 0, 0.5, shape=d["house"].max() + 1)
+    mu_clade = pm.Normal("mu_clade", 0, 0.5, shape=d["clade_id"].max() + 1)
+    mu = mu_clade[d["clade_id"].values] + mu_house[d["house"].values]
+
+    K = pm.Normal("K", mu, sigma, observed=d["K"])
+
+    m5_9_trace = pm.sample()
+
+az.summary(m5_9_trace, var_names=["mu_clade", "mu_house"])
