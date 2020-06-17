@@ -138,5 +138,54 @@ comp_df
 # %%
 az.plot_compare(comp_df)
 
+# %%
+with pm.Model() as model_7_5_b:
+    a = pm.Normal('a', mu=8, sd=100)
+    bR = pm.Normal('bR', mu=0, sd=1)
+    bA = pm.Normal('bA', mu=0, sd=1)
+    bAR = pm.Normal('bAR', mu=0, sd=1)
+    sigma = pm.Uniform('sigma', lower=0, upper=10)
+    mu = pm.Deterministic('mu', a + bR * dd.rugged + bAR * dd.rugged * dd.cont_africa + bA * dd.cont_africa) 
+    log_gdp = pm.Normal('log_gdp', mu, sigma, observed=np.log(dd.rgdppc_2000))
+    trace_7_5b = pm.sample(1000, tune=1000)
 
-# start from code 7.7
+# %%
+rugged_seq = np.arange(-1, 9, .25)
+
+# compute mu over samples 
+mu_pred_NotAfrica = np.zeros((len(rugged_seq), len(trace_7_5b['bR'])))
+mu_pred_Africa = np.zeros((len(rugged_seq), len(trace_7_5b['bR'])))
+for iSeq, seq in enumerate(rugged_seq):
+    mu_pred_NotAfrica[iSeq] = trace_7_5b['a'] + trace_7_5b['bR'] * rugged_seq[iSeq] + trace_7_5b['bAR'] * rugged_seq[iSeq] * 0 + trace_7_5b['bA'] * 0
+    mu_pred_Africa[iSeq] = trace_7_5b['a'] + trace_7_5b['bR'] * rugged_seq[iSeq] + trace_7_5b['bAR'] * rugged_seq[iSeq] * 1 + trace_7_5b['bA'] * 1
+
+mu_mean_NotAfrica = mu_pred_NotAfrica.mean(1)
+mu_mean_Africa = mu_pred_Africa.mean(1)
+
+# %%
+f, (ax1, ax2) = plt.subplots(1, 2, sharey=True, figsize=(8,3))
+ax1.plot(dA1['rugged'], np.log(dA1['rgdppc_2000']), 'C0o')
+ax1.plot(rugged_seq, mu_mean_Africa, 'C0')
+az.plot_hpd(rugged_seq, mu_pred_Africa.T, credible_interval=0.97, color='C0', ax=ax1)
+
+ax1.set_title('African Nations')
+ax1.set_ylabel('log GDP year 2000', fontsize=14);
+ax1.set_xlabel('Terrain Ruggedness Index', fontsize=14)
+               
+ax2.plot(dA0['rugged'], np.log(dA0['rgdppc_2000']), 'ko')
+ax2.plot(rugged_seq, mu_mean_NotAfrica, 'k')
+az.plot_hpd(rugged_seq, mu_pred_NotAfrica.T, credible_interval=0.97, color='C1', ax=ax2)
+ax2.set_title('Non-African Nations')
+ax2.set_ylabel('log GDP year 2000', fontsize=14)
+ax2.set_xlabel('Terrain Ruggedness Index', fontsize=14);
+
+# %%
+varnames = ['~mu']
+az.summary(trace_7_5b, varnames, credible_interval=.89).round(3)
+
+# %%
+gamma_Africa = trace_7_5b['bR'] + trace_7_5b['bAR'] * 1
+gamma_notAfrica = trace_7_5b['bR']
+
+# %%
+
